@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Emoji Quest</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      font-family: Arial, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      user-select: none;
+    }
+
+    #gameCanvas {
+      width: 900px;
+      height: 600px;
+      background: #1e3c72;
+      border-radius: 20px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+    }
+
+    /* overlays */
+    .overlay {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      text-align: center;
+      background: rgba(0, 0, 0, 0.85);
+      color: #fff;
+      padding: 0 40px;
+    }
+    .hidden { display: none; }
+
+    button {
+      padding: 16px 36px;
+      margin-top: 24px;
+      font-size: 24px;
+      border: none;
+      border-radius: 50px;
+      color: #fff;
+      cursor: pointer;
+      background: linear-gradient(135deg, #f093fb, #f5576c);
+    }
+    input {
+      padding: 10px 14px;
+      margin-top: 16px;
+      font-size: 22px;
+      border: none;
+      border-radius: 8px;
+      text-align: center;
+    }
+
+    /* hud */
+    #hud {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      font-size: 20px;
+      color: #fff;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <div style="position: relative; width: 900px; height: 600px;">
+    <canvas id="gameCanvas" width="900" height="600"></canvas>
+
+    <!-- hud -->
+    <div id="hud">
+      Score <span id="scoreOut">0</span> | Coins <span id="coinOut">0</span>
+    </div>
+
+    <!-- title -->
+    <div id="titleOL" class="overlay">
+      <h1 style="font-size: 60px; margin-bottom: 12px;">Emoji Quest</h1>
+      <div style="font-size: 100px;">😊</div>
+      <button id="startBtn">Start</button>
+    </div>
+
+    <!-- story -->
+    <div id="storyOL" class="overlay hidden">
+      <p id="storyText" style="font-size: 22px; line-height: 1.5; max-width: 640px; margin-bottom: 24px;"></p>
+      <button id="nextStory">Continue</button>
+    </div>
+
+    <!-- puzzle -->
+    <div id="puzzleOL" class="overlay hidden">
+      <div id="bossFace" style="font-size: 120px; margin-bottom: 14px;"></div>
+      <p id="puzzleQuestion" style="font-size: 22px; max-width: 540px; line-height: 1.4;"></p>
+      <input id="puzzleInput" placeholder="your answer" />
+      <p id="feedback" style="height: 26px; margin-top: 10px; font-size: 20px;"></p>
+      <button id="submitAns">Submit</button>
+    </div>
+
+    <!-- game over -->
+    <div id="gameOver" class="overlay hidden">
+      <h1 style="font-size: 60px; margin-bottom: 14px;">Game Over</h1>
+      <p id="finalScore" style="font-size: 24px; margin-bottom: 28px;"></p>
+      <button onclick="location.reload()">Play Again</button>
+    </div>
+  </div>
+
+  <script>
+    /* ===== constants ===== */
+    const W = 3200;
+    const G = 0.5;
+    const BOUNCE = -12;
+
+    /* ===== core data ===== */
+    const ctx = document.getElementById("gameCanvas").getContext("2d");
+
+    const player = { x: 120, y: 300, w: 40, h: 40, vx: 0, vy: 0, max: 8 };
+    const plats = [{ x: 0, y: 560, w: W, h: 40 }];
+    for (let x = 200; x < W; x += 300) {
+      plats.push({ x: x - 90, y: 300 + Math.sin(x * 0.002) * 120, w: 180, h: 20 });
+    }
+
+    const coins = [];
+    const STEP = 120;
+    for (let x = 100; x < W - 80; x += STEP) {
+      for (let y = 140; y < 500; y += STEP) {
+        if (Math.random() < 0.35) coins.push({ x, y, taken: false });
+      }
+    }
+
+    const puzzles = [
+      { q: "type the word cool backward", a: "looc" },
+      { q: "solve 5 plus 7 times 2", a: "19" },
+      { q: "first three letters of alphabet", a: "abc" },
+      { q: "sky color on clear day", a: "blue" }
+    ];
+
+    const bosses = [
+      { x: 700,  y: 200, s: 50, e: "😈", live: true, idx: 0 },
+      { x: 1500, y: 240, s: 50, e: "💀", live: true, idx: 1 },
+      { x: 2300, y: 180, s: 50, e: "😭", live: true, idx: 2 },
+      { x: 3000, y: 220, s: 50, e: "🤬", live: true, idx: 3 }
+    ];
+
+    /* ===== ui refs ===== */
+    const scoreOut = document.getElementById("scoreOut");
+    const coinOut  = document.getElementById("coinOut");
+    const finalScore = document.getElementById("finalScore");
+
+    /* story refs */
+    const storyLines = [
+      "Emoji Land once overflowed with joyful faces.",
+      "But the Four Fallen Faces stole the smiles.",
+      "Young Happy escaped with a mission: restore joy by defeating each knight.",
+      "Collect grid coins, solve riddles, and bring back the light!"
+    ];
+    let storyIdx = 0;
+
+    /* ===== state ===== */
+    let camX = 0;
+    let score = 0;
+    let coinsHeld = 0;
+    let mode = "title"; // title, story, play, puzzle, end
+    let currentBoss = null;
+
+    /* ===== input ===== */
+    const keys = {};
+    window.addEventListener("keydown", e => keys[e.key.toLowerCase()] = true);
+    window.addEventListener("keyup",   e => keys[e.key.toLowerCase()] = false);
+
+    /* ===== overlay controls ===== */
+    document.getElementById("startBtn").onclick = () => {
+      document.getElementById("titleOL").classList.add("hidden");
+      document.getElementById("storyText").textContent = storyLines[0];
+      document.getElementById("storyOL").classList.remove("hidden");
+      mode = "story";
+    };
+
+    document.getElementById("nextStory").onclick = () => {
+      storyIdx++;
+      if (storyIdx < storyLines.length) {
+        document.getElementById("storyText").textContent = storyLines[storyIdx];
+      } else {
+        document.getElementById("storyOL").classList.add("hidden");
+        mode = "play";
+        requestAnimationFrame(loop);
+      }
+    };
+
+    document.getElementById("submitAns").onclick = checkPuzzle;
+    document.getElementById("puzzleInput").addEventListener("keydown", e => { if (e.key === "Enter") checkPuzzle(); });
+
+    /* ===== main loop ===== */
+    function loop() {
+      if (mode === "play") playUpdate();
+      draw();
+      if (mode !== "end") requestAnimationFrame(loop);
+    }
+
+    /* ---------------- PLAY UPDATE ---------------- */
+    function playUpdate() {
+      // input movement
+      if (keys["arrowleft"] || keys["a"]) player.vx = Math.max(-player.max, player.vx - 1);
+      if (keys["arrowright"]|| keys["d"]) player.vx = Math.min(player.max,  player.vx + 1);
+      if ((keys["arrowup"] || keys["w"]) && Math.abs(player.vy) < 2) player.vy = BOUNCE;
+
+      // physics
+      player.vy += G;
+      player.x += player.vx;
+      player.y += player.vy;
+      player.vx *= 0.96;
+
+      if (player.x < 0) player.x = 0;
+      if (player.x + player.w > W) player.x = W - player.w;
+
+      for (const p of plats) {
+        if (hit(player, p) && player.vy > 0 && player.y + player.h < p.y + 20) {
+          player.y = p.y - player.h;
+          player.vy = BOUNCE;
+        }
+      }
+
+      // collect coins
+      for (const coin of coins) {
+        if (!coin.taken && dist(player.x + 20, player.y + 20, coin.x, coin.y) < 25) {
+          coin.taken = true;
+          coinsHeld++;
+          score += 5;
+        }
+      }
+
+      // boss collision
+      for (const b of bosses) {
+        if (b.live && hit(player, b)) {
+          showPuzzle(b);
+          break;
+        }
+      }
+
+      // fall
+      if (player.y > 600) end(false);
+
+      // camera
+      camX = Math.max(0, Math.min(W - 900, player.x - 450));
+
+      // update HUD
+      scoreOut.textContent = score;
+      coinOut.textContent  = coinsHeld;
+    }
+
+    /* ---------------- PUZZLES ---------------- */
+    function showPuzzle(boss) {
+      mode = "puzzle";
+      currentBoss = boss;
+      bossFace.textContent = boss.e;
+      puzzleQuestion.textContent = puzzles[boss.idx].q;
+      puzzleInput.value = "";
+      feedback.textContent = "";
+      puzzleOL.classList.remove("hidden");
+      puzzleInput.focus();
+    }
+
+    function checkPuzzle() {
+      const answer = puzzleInput.value.trim().toLowerCase();
+      const correct = puzzles[currentBoss.idx].a;
+      if (answer === correct) {
+        feedback.textContent = "correct";
+        currentBoss.live = false;
+        score += 500;
+        puzzleOL.classList.add("hidden");
+        mode = "play";
+        if (bosses.every(b => !b.live)) end(true);
+      } else {
+        feedback.textContent = "wrong";
+        end(false);
+      }
+    }
+
+    /* ---------------- DRAW ---------------- */
+    function draw() {
+      ctx.clearRect(0, 0, 900, 600);
+
+      // sky
+      const sky = ctx.createLinearGradient(0, 0, 0, 600);
+      sky.addColorStop(0, "#87CEEB");
+      sky.addColorStop(1, "#B0E0E6");
+      ctx.fillStyle = sky;
+      ctx.fillRect(0, 0, 900, 600);
+
+      // ground strip
+      ctx.fillStyle = "#006400";
+      ctx.fillRect(0, 560, 900, 40);
+
+      // platforms
+      ctx.fillStyle = "#8B4513";
+      for (const p of plats) {
+        if (p.y === 560) continue;
+        ctx.fillRect(p.x - camX, p.y, p.w, p.h);
+        ctx.fillStyle = "#228B22";
+        ctx.fillRect(p.x - camX, p.y - 5, p.w, 5);
+        ctx.fillStyle = "#8B4513";
+      }
+
+      // coins
+      ctx.font = "26px serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      for (const coin of coins) if (!coin.taken) ctx.fillText("🪙", coin.x - camX, coin.y);
+
+      // bosses
+      for (const b of bosses) if (b.live) {
+        ctx.font = b.s + "px serif";
+        ctx.fillText(b.e, b.x - camX, b.y);
+      }
+
+      // player
+      ctx.font = "40px serif";
+      ctx.fillText("😊", player.x - camX, player.y);
+    }
+
+    /* ---------------- HELPERS ---------------- */
+    function hit(a, b) {
+      const bw = b.w || b.s;
+      const bh = b.h || b.s;
+      return a.x < b.x + bw && a.x + a.w > b.x && a.y < b.y + bh && a.y + a.h > b.y;
+    }
+    function dist(x1, y1, x2, y2) { return Math.hypot(x2 - x1, y2 - y1); }
+    function end(win) {
+      mode = "end";
+      document.getElementById("gameOver").classList.remove("hidden");
+      finalScore.textContent = (win ? "Victory! " : "Your score ") + score;
+    }
+  </script>
+</body>
+</html>
